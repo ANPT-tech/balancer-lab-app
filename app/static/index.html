@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Balancer Lab App</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f172a;
+      --panel: #111827;
+      --panel-2: #1f2937;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --ok: #22c55e;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(135deg, #020617, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+    }
+    main {
+      width: min(1100px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 44px 0 64px;
+    }
+    h1 { margin-bottom: 8px; font-size: clamp(2rem, 4vw, 3.2rem); }
+    h2 { margin-top: 0; }
+    p { line-height: 1.55; }
+    .muted { color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 18px;
+      margin-top: 24px;
+    }
+    .card {
+      background: rgba(17, 24, 39, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: 0 18px 50px rgba(0,0,0,.2);
+    }
+    .node {
+      color: var(--accent);
+      font-size: 1.5rem;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+    code {
+      background: var(--panel-2);
+      border-radius: 7px;
+      padding: 2px 7px;
+    }
+    button {
+      cursor: pointer;
+      border: 0;
+      border-radius: 10px;
+      padding: 11px 15px;
+      font-weight: 800;
+      background: var(--accent);
+      color: #082f49;
+      margin: 4px 8px 4px 0;
+    }
+    button:disabled { opacity: .5; cursor: wait; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 9px 6px;
+    }
+    .ok { color: var(--ok); font-weight: 800; }
+    .error { color: #f87171; }
+    .wide { grid-column: 1 / -1; }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #020617;
+      padding: 14px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Balancer Lab App</h1>
+  <p class="muted">
+    Stateless-приложение для демонстрации L4/L7-балансировки, DNS-балансировки,
+    TLS-терминации на reverse proxy и параллельных асинхронных запросов.
+  </p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Текущий backend</h2>
+      <div id="node" class="node">загрузка…</div>
+      <p>Hostname: <code id="hostname">—</code></p>
+      <p>PID: <code id="pid">—</code></p>
+      <p>Request ID: <code id="request-id">—</code></p>
+      <button id="refresh">Новый запрос</button>
+    </section>
+
+    <section class="card">
+      <h2>Health checks</h2>
+      <p>Liveness: <span id="live">проверка…</span></p>
+      <p>Readiness: <span id="ready">проверка…</span></p>
+      <p class="muted">
+        Эндпоинты: <code>/health/live</code> и <code>/health/ready</code>.
+      </p>
+    </section>
+
+    <section class="card wide">
+      <h2>Демонстрация балансировки</h2>
+      <p>
+        Кнопка ниже одновременно отправляет запросы на <code>/api/async-work</code>.
+        При доступе через балансировщик в таблице должны появиться разные
+        <code>instance_id</code>.
+      </p>
+      <button id="run10">10 параллельных запросов</button>
+      <button id="run30">30 параллельных запросов</button>
+      <span id="status" class="muted"></span>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Backend node</th>
+            <th>Ответов</th>
+            <th>Доля</th>
+          </tr>
+        </thead>
+        <tbody id="results">
+          <tr><td colspan="3" class="muted">Запустите тест</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card wide">
+      <h2>Последний ответ API</h2>
+      <pre id="raw">—</pre>
+    </section>
+  </div>
+</main>
+
+<script>
+async function getJson(url) {
+  const response = await fetch(url, { cache: "no-store" });
+  const body = await response.json();
+  if (!response.ok) throw new Error(JSON.stringify(body));
+  return { body, headers: response.headers };
+}
+
+async function refreshInfo() {
+  try {
+    const { body, headers } = await getJson("/api/backend-info");
+    document.getElementById("node").textContent = body.instance_id;
+    document.getElementById("hostname").textContent = body.hostname;
+    document.getElementById("pid").textContent = body.pid;
+    document.getElementById("request-id").textContent = body.request_id;
+    document.getElementById("raw").textContent = JSON.stringify(body, null, 2)
+      + "\n\nX-Backend-Node: " + headers.get("X-Backend-Node");
+  } catch (e) {
+    document.getElementById("raw").textContent = String(e);
+  }
+}
+
+async function refreshHealth() {
+  for (const [id, url] of [["live", "/health/live"], ["ready", "/health/ready"]]) {
+    try {
+      const { body } = await getJson(url);
+      const el = document.getElementById(id);
+      el.textContent = body.status + " (" + body.instance_id + ")";
+      el.className = "ok";
+    } catch {
+      const el = document.getElementById(id);
+      el.textContent = "error";
+      el.className = "error";
+    }
+  }
+}
+
+async function runBatch(count) {
+  const buttons = [document.getElementById("run10"), document.getElementById("run30")];
+  buttons.forEach(b => b.disabled = true);
+  const status = document.getElementById("status");
+  status.textContent = "Выполняется…";
+
+  const started = performance.now();
+  const tasks = Array.from({ length: count }, (_, i) => {
+    // Small delay variation makes concurrent async handling visually obvious.
+    const delay = 250 + (i % 5) * 100;
+    return getJson("/api/async-work?delay_ms=" + delay).then(x => x.body);
+  });
+
+  try {
+    const data = await Promise.all(tasks);
+    const counts = {};
+    data.forEach(item => {
+      counts[item.instance_id] = (counts[item.instance_id] || 0) + 1;
+    });
+
+    const tbody = document.getElementById("results");
+    tbody.innerHTML = "";
+    Object.entries(counts)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .forEach(([node, n]) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td><code>${node}</code></td><td>${n}</td><td>${(n / count * 100).toFixed(1)}%</td>`;
+        tbody.appendChild(tr);
+      });
+
+    const elapsed = Math.round(performance.now() - started);
+    status.textContent = `Готово: ${count} ответов за ${elapsed} мс, backend-нод: ${Object.keys(counts).length}`;
+    document.getElementById("raw").textContent =
+      JSON.stringify(data.slice(0, 5), null, 2) +
+      (data.length > 5 ? "\n\n…показаны первые 5 ответов" : "");
+  } catch (e) {
+    status.textContent = "Ошибка";
+    document.getElementById("raw").textContent = String(e);
+  } finally {
+    buttons.forEach(b => b.disabled = false);
+  }
+}
+
+document.getElementById("refresh").addEventListener("click", refreshInfo);
+document.getElementById("run10").addEventListener("click", () => runBatch(10));
+document.getElementById("run30").addEventListener("click", () => runBatch(30));
+
+refreshInfo();
+refreshHealth();
+</script>
+</body>
+</html>
